@@ -1,0 +1,849 @@
+import cv2
+import streamlit as st
+import numpy as np
+from streamlit_drawable_canvas import st_canvas
+from skimage.metrics import structural_similarity as ssim
+import matplotlib.pyplot as plt
+import pandas as pd
+from PIL import Image
+import os
+import tempfile
+import base64
+import time
+#import io
+#import av
+
+# Disable the warning globally
+st.set_option('deprecation.showPyplotGlobalUse', False)
+
+# Define blur parameters
+GAUSSIAN_KERNEL_SIZE = (7, 7)
+GAUSSIAN_SIGMA_X = 0
+MEDIAN_KERNEL_SIZE = 5
+BILATERAL_DIAMETER = 9
+BILATERAL_SIGMA_COLOR = 75
+BILATERAL_SIGMA_SPACE = 75
+
+# Define the directory path where you want to save the grayscale image
+save_directory = r"C:\images"
+
+# Create the directory if it doesn't exist
+os.makedirs(save_directory, exist_ok=True)
+
+#Function to save the image
+def save_image(img, filename):
+    cv2.imwrite(filename, img)
+
+# Function to detect edges
+def detect_edges(img):
+    edges = cv2.Canny(img, 100, 200)
+    return edges
+
+# Function to convert to gray scale
+def convert_to_gray(img):
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    return gray
+
+
+# Function to play with RGB channels
+def play_with_channels(img, channel):
+    img_copy = img.copy()
+    if channel == "Red":
+        img_copy[:, :, 0] = 0  # Set the red channel to 0
+    elif channel == "Green":
+        img_copy[:, :, 1] = 0  # Set the green channel to 0
+    elif channel == "Blue":
+        img_copy[:, :, 2] = 0  # Set the blue channel to 0
+    return img_copy
+
+
+# Function to resize an image
+def resize(img, width, height):
+    resized_img = cv2.resize(img, (width, height), interpolation=cv2.INTER_LINEAR)
+    resized_img_rgb = cv2.cvtColor(resized_img, cv2.COLOR_BGR2RGB)  # Convert to RGB color space
+    return resized_img_rgb
+
+
+# Function to apply blur filter
+def apply_blur(img, blur_type):
+    if blur_type == "Gaussian":
+        blurred_img = cv2.GaussianBlur(img, GAUSSIAN_KERNEL_SIZE, GAUSSIAN_SIGMA_X)
+    elif blur_type == "Median":
+        blurred_img = cv2.medianBlur(img, MEDIAN_KERNEL_SIZE)
+    elif blur_type == "Bilateral":
+        blurred_img = cv2.bilateralFilter(img, BILATERAL_DIAMETER, BILATERAL_SIGMA_COLOR, BILATERAL_SIGMA_SPACE)
+    else:
+        blurred_img = img  # If an invalid blur type is provided, return the original image
+
+    # Convert the blurred image to RGB color space
+    blurred_img_rgb = cv2.cvtColor(blurred_img, cv2.COLOR_BGR2RGB)
+    return blurred_img_rgb
+
+
+# Function to rotate an image
+def rotate_image(img, angle):
+    # Get image dimensions
+    height, width = img.shape[:2]
+    # Calculate rotation matrix
+    rotation_matrix = cv2.getRotationMatrix2D((width / 2, height / 2), angle, 1)
+    # Apply rotation to the image
+    rotated_ig = cv2.warpAffine(img, rotation_matrix, (width, height))
+    rotated_img = cv2.cvtColor(rotated_ig, cv2.COLOR_BGR2RGB)
+    return rotated_img
+
+
+# Function to detect faces
+def detect_faces(img):
+    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+    for (x, y, w, h) in faces:
+        cv2.rectangle(img, (x, y), (x + w, y + h), (255, 0, 0), 2)
+    return img
+
+
+# Function to crop an image
+def crop_image(img, x1, y1, x2, y2):
+    cropped_img = img[y1:y2, x1:x2]
+    return cropped_img
+
+
+# function to draw shapes
+def draw_shapes(img, shape_type, color, thickness, start_point, end_point=None, radius=None, text=None,
+                font=cv2.FONT_HERSHEY_SIMPLEX, font_scale=1, text_color=(255, 255, 255), text_thickness=1):
+    if shape_type == "rectangle":
+        cv2.rectangle(img, start_point, end_point, color, thickness)
+    elif shape_type == "circle":
+        cv2.circle(img, start_point, radius, color, thickness)
+    elif shape_type == "line":
+        cv2.line(img, start_point, end_point, color, thickness)
+    elif shape_type == "text":
+        cv2.putText(img, text, start_point, font, font_scale, text_color, text_thickness)
+    else:
+        raise ValueError("Invalid shape type. Supported types: 'rectangle', 'circle', 'line', 'text'")
+
+    return img
+
+
+# Cartoonize a img
+def cartoonize_image(image, cartoonization_factor=50):
+    # Convert image to grayscale
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    # Apply bilateral filter to reduce noise while preserving edges
+    gray_blur = cv2.bilateralFilter(gray, 7, 50, 50)
+
+    # Apply median blur to further reduce noise and smoothen edges
+    edges = cv2.medianBlur(gray_blur, 5)
+
+    # Detect edges using adaptive thresholding
+    edges = cv2.adaptiveThreshold(edges, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 9, 9)
+
+    # Apply a color quantization algorithm to reduce the number of colors
+    quantization_factor = 10  # Increase to reduce the number of colors
+    img_color_quantized = cv2.medianBlur(image, 9)
+    img_color_quantized = cv2.pyrMeanShiftFiltering(img_color_quantized, 10, 30)
+    img_color_quantized = cv2.cvtColor(img_color_quantized, cv2.COLOR_BGR2RGB)
+
+    # Create a cartoonized image by combining the edges and color quantized image
+    cartoon = cv2.bitwise_and(img_color_quantized, img_color_quantized, mask=edges)
+
+    return cartoon
+
+
+# reflection
+def add_reflection(image, reflection_intensity=0.5):
+    reflection = cv2.flip(image, 0)
+
+    # Blend the original image and its reflection
+    reflected_image = cv2.addWeighted(image, 1 - reflection_intensity, reflection, reflection_intensity, 0)
+
+    return reflected_image
+
+
+# Function to detect contours and recognize shapes
+def recognize_shapes(image):
+# Converting image into grayscale
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    # Setting threshold of gray image
+    _, threshold = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
+
+    # Using a findContours() function
+    contours, _ = cv2.findContours(threshold, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+
+    detected_shapes = []
+
+    for contour in contours:
+        # Here we are ignoring small contours
+        if cv2.contourArea(contour) < 500:
+            continue
+
+        # Using approxPolyDP() function to approximate the shape
+        approx = cv2.approxPolyDP(contour, 0.01 * cv2.arcLength(contour, True), True)
+
+        # Finding center point of shape
+        M = cv2.moments(contour)
+        if M['m00'] != 0.0:
+            x = int(M['m10'] / M['m00'])
+            y = int(M['m01'] / M['m00'])
+
+        # Identifying shape based on the number of vertices
+        if len(approx) == 3:
+            shape_name = 'Triangle'
+        elif len(approx) == 4:
+            shape_name = 'Quadrilateral'
+        elif len(approx) == 5:
+            shape_name = 'Pentagon'
+        elif len(approx) == 6:
+            shape_name = 'Hexagon'
+        else:
+            shape_name = 'Circle'
+
+        detected_shapes.append((shape_name, (x, y)))
+
+    return detected_shapes
+
+
+# Hu moment
+def calculate_hu_moments(image):
+    # Convert the image to grayscale
+    gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    # Threshold the grayscale image
+    _, binary_image = cv2.threshold(gray_image, 0, 255, cv2.THRESH_BINARY)
+
+    # Find contours in the binary image
+    contours, _ = cv2.findContours(binary_image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    # Select the contour representing the fire (you may need to adjust this based on your specific case)
+    fire_contour = max(contours, key=cv2.contourArea)
+
+    # Calculate moments for the selected contour
+    moments = cv2.moments(fire_contour)
+
+    # Calculate Hu Moments
+    hu_moments = cv2.HuMoments(moments)
+
+    # Log scale transform for Hu Moments
+    for i in range(0, 7):
+        hu_moments[i] = -1 * np.sign(hu_moments[i]) * np.log10(abs(hu_moments[i]))
+
+    return hu_moments.flatten()
+
+
+def calculate_hu1_moment(image):
+    # Convert the image to grayscale
+    gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    # Calculate moments
+    moments = cv2.moments(gray_image)
+
+    # Calculate Hu Moments
+    hu_moments = cv2.HuMoments(moments)
+
+    # Log scale transform for Hu1
+    hu1_moment = -1 * np.sign(hu_moments[0]) * np.log10(abs(hu_moments[0]))
+
+    # Plot histogram of Hu Moment 1 values across the dataset
+    plt.figure(figsize=(8, 6))
+    plt.hist(hu1_moment, bins=20, color='skyblue', edgecolor='black')
+    plt.title('Distribution of Hu Moment 1 (Hu1)')
+    plt.xlabel('Hu Moment 1 Value')
+    plt.ylabel('Frequency')
+    plt.grid(True)
+    plt.show()
+
+    return hu1_moment
+
+
+def calculate_hu_moments_contour(image):
+    # Convert the image to grayscale
+    gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    # Apply thresholding to obtain a binary image
+    _, binary_image = cv2.threshold(gray_image, 127, 255, cv2.THRESH_BINARY)
+
+    # Calculate contours in the binary image
+    contours, _ = cv2.findContours(binary_image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    # Calculate Hu Moments for the largest contour
+    moments = cv2.moments(max(contours, key=cv2.contourArea))
+    hu_moments = cv2.HuMoments(moments).flatten()
+
+    return hu_moments
+
+
+def compare_images(image1, image2):
+    # Calculate Hu Moments for both images
+    hu_moments1 = calculate_hu_moments_contour(image1)
+    hu_moments2 = calculate_hu_moments_contour(image2)
+
+    # Calculate Euclidean distance between the Hu Moment feature vectors
+    euclidean_distance1 = np.linalg.norm(hu_moments1)
+    euclidean_distance2 = np.linalg.norm(hu_moments2)
+
+    return euclidean_distance1, euclidean_distance2
+
+
+def find_differences(image1, image2):
+    # Resize image1 to match the dimensions of image2
+    resized_image1 = cv2.resize(image1, (image2.shape[1], image2.shape[0]))
+
+    # Convert images to grayscale
+    gray1 = cv2.cvtColor(resized_image1, cv2.COLOR_BGR2GRAY)
+    gray2 = cv2.cvtColor(image2, cv2.COLOR_BGR2GRAY)
+
+    # Compute absolute difference between the two grayscale images
+    diff = cv2.absdiff(gray1, gray2)
+
+    # Apply a threshold to obtain a binary mask of significant differences
+    _, mask = cv2.threshold(diff, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+
+    # Dilate the thresholded image to enhance the differences
+    kernel = np.ones((5, 5), np.uint8)
+    dilated_mask = cv2.dilate(mask, kernel, iterations=2)
+
+    # Find contours in the dilated mask
+    contours, _ = cv2.findContours(dilated_mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    # Draw rectangles around significant differences on both images
+    for contour in contours:
+        if cv2.contourArea(contour) > 100:
+            x, y, w, h = cv2.boundingRect(contour)
+            cv2.rectangle(resized_image1, (x, y), (x + w, y + h), (0, 0, 255), 2)
+            cv2.rectangle(image2, (x, y), (x + w, y + h), (0, 0, 255), 2)
+
+    # Concatenate the two images horizontally for visualization
+    result = np.hstack((resized_image1, np.zeros((resized_image1.shape[0], 10, 3), np.uint8), image2))
+
+    return result
+
+def compute_hu_moments_contour(image):
+    # Convert the image to grayscale
+    gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    # Threshold the grayscale image
+    _, binary_image = cv2.threshold(gray_image, 0, 255, cv2.THRESH_BINARY)
+
+    # Find contours in the binary image
+    contours, _ = cv2.findContours(binary_image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    # Select the contour representing the object
+    object_contour = max(contours, key=cv2.contourArea)
+
+    # Calculate moments for the selected contour
+    moments = cv2.moments(object_contour)
+
+    # Calculate Hu Moments
+    hu_moments = cv2.HuMoments(moments)
+
+    # Log scale transform for Hu Moments
+    for i in range(0, 7):
+        hu_moments[i] = -1 * np.sign(hu_moments[i]) * np.log10(abs(hu_moments[i]))
+
+    return hu_moments.flatten()
+
+def extract_features_double_image(image1, image2):
+    # Calculate Hu Moments for both images
+    hu_moments1 = compute_hu_moments_contour(image1)
+    hu_moments2 = compute_hu_moments_contour(image2)
+
+    # Concatenate the Hu Moments features of both images
+    combined_hu_moments = np.concatenate((hu_moments1, hu_moments2))
+
+    return combined_hu_moments
+
+def resize_image(image, target_shape):
+    return cv2.resize(image, target_shape[::-1])
+
+def compare_images_ssim(img1, img2):
+    try:
+        # Ensure both images have the same dimensions
+        min_shape = (min(img1.shape[0], img2.shape[0]), min(img1.shape[1], img2.shape[1]))
+        img1_resized = resize_image(img1, min_shape)
+        img2_resized = resize_image(img2, min_shape)
+
+        # Calculate SSIM between the resized images
+        similarity_index, _ = ssim(img1_resized, img2_resized, full=True)
+        return similarity_index
+    except Exception as e:
+        print(f"Error occurred during SSIM calculation: {e}")
+        return None
+
+def calculate_area_perimeter_centroid(image):
+    # Convert the image to grayscale
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    # Threshold the image to obtain a binary image
+    _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+
+    # Find contours in the binary image
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    # Ensure at least one contour was found
+    if len(contours) == 0:
+        return None, None, None
+
+    # Select the largest contour (assuming it represents the object)
+    largest_contour = max(contours, key=cv2.contourArea)
+
+    # Calculate area and perimeter of the contour
+    area = cv2.contourArea(largest_contour)
+    perimeter = cv2.arcLength(largest_contour, closed=True)
+
+    # Calculate centroid using moments
+    moments = cv2.moments(largest_contour)
+    if moments["m00"] != 0:
+        centroid_x = int(moments["m10"] / moments["m00"])
+        centroid_y = int(moments["m01"] / moments["m00"])
+    else:
+        centroid_x, centroid_y = None, None
+
+    return area, perimeter, (centroid_x, centroid_y)
+
+# Initialize 'a' in the session state
+if 'a' not in st.session_state:
+    st.session_state.a = 0
+
+
+# Function for object detection
+def detect_objects(frame):
+    # Load pre-trained model for object detection (e.g., YOLO, SSD, etc.)
+    # Replace this with the appropriate model and configuration file
+    net = cv2.dnn.readNet("yolov3.weights", "yolov3.cfg")
+    classes = []
+    with open("coco.names", "r") as f:
+        classes = [line.strip() for line in f.readlines()]
+    layer_names = net.getLayerNames()
+    output_layers = [layer_names[i[0] - 1] for i in net.getUnconnectedOutLayers()]
+
+    # Convert frame to blob
+    blob = cv2.dnn.blobFromImage(frame, 0.00392, (416, 416), (0, 0, 0), True, crop=False)
+
+    # Forward pass through network
+    net.setInput(blob)
+    outs = net.forward(output_layers)
+
+    # Process detections
+    boxes = []
+    confidences = []
+    class_ids = []
+    for out in outs:
+        for detection in out:
+            scores = detection[5:]
+            class_id = np.argmax(scores)
+            confidence = scores[class_id]
+            if confidence > 0.5:  # Adjust confidence threshold as needed
+                # Get center, width, and height of bounding box
+                center_x = int(detection[0] * frame.shape[1])
+                center_y = int(detection[1] * frame.shape[0])
+                w = int(detection[2] * frame.shape[1])
+                h = int(detection[3] * frame.shape[0])
+
+                # Calculate top-left corner coordinates
+                x = int(center_x - w / 2)
+                y = int(center_y - h / 2)
+
+                # Store bounding box information
+                boxes.append([x, y, w, h])
+                confidences.append(float(confidence))
+                class_ids.append(class_id)
+
+    # Non-maximum suppression to remove redundant boxes
+    indexes = cv2.dnn.NMSBoxes(boxes, confidences, 0.5, 0.4)
+
+    # Draw bounding boxes and labels on frame
+    colors = np.random.uniform(0, 255, size=(len(classes), 3))
+    for i in range(len(boxes)):
+        if i in indexes:
+            x, y, w, h = boxes[i]
+            label = str(classes[class_ids[i]])
+            color = colors[class_ids[i]]
+            cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
+            cv2.putText(frame, label, (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+    return frame
+
+timestr = time.strftime("%Y%m%d-%H%M%S")
+
+class FileDownloader(object):
+
+    def __init__(self, data, filename='myfile', file_ext='png'):
+        super(FileDownloader, self).__init__()
+        self.data = data
+        self.filename = filename
+        self.file_ext = file_ext
+
+    def download(self):
+        if isinstance(self.data, bytes):
+            b64 = base64.b64encode(self.data).decode()
+        else:
+            b64 = base64.b64encode(self.data.encode()).decode()
+        new_filename = "{}_{}_.{}".format(self.filename, timestr, self.file_ext)
+        st.markdown("#### Download File ###")
+
+    # Check if the file extension is supported, if not, default to PNG
+        if self.file_ext not in ['png', 'jpg', 'jpeg', 'bmp']:
+            self.file_ext = 'png'  # Default to PNG format
+
+        href = f'<a href="data:file/{self.file_ext};base64,{b64}" download="{new_filename}">Click Here!!</a>'
+        st.markdown(href, unsafe_allow_html=True)
+
+def webcam():
+    cam = cv2.VideoCapture(0)
+    fourcc = cv2.VideoWriter_fourcc(*'XVID')
+    out = cv2.VideoWriter('output.avi', fourcc, 20.0, (640, 480))
+    frame_placeholder = st.empty()
+    grayscale_button_key = "grayscale_button"
+    grayscale_button = st.button("Convert to Grayscale", key=f"{grayscale_button_key}_{time.time()}")
+    stop_button_key = "stop_button"
+    stop_button = st.button("Stop", key=f"{stop_button_key}_{time.time()}")
+
+
+    while cam.isOpened():
+        ret, frame = cam.read()
+        if not ret:
+            break
+
+        out.write(frame)
+
+        if grayscale_button:
+            frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            frame_rgb = cv2.cvtColor(frame_gray, cv2.COLOR_GRAY2RGB)
+
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+        frame_placeholder.image(frame_rgb, channels="BGR")
+
+        if stop_button:
+            break
+
+    cam.release()
+    out.release()
+    cv2.destroyAllWindows()
+
+
+
+
+
+
+
+# Set the title of the web app
+st.title("Visionary: Explore the World of Image Magic with OpenCV")
+st.sidebar.title('OpenCV App for small image processing tasks')
+
+# Add a button to upload the image file for users
+uploaded_file_1 = st.sidebar.file_uploader("Choose the first image", type=["jpg", "jpeg", "png"])
+uploaded_file_2 = st.sidebar.file_uploader("Choose the second image", type=["jpg", "jpeg", "png"])
+
+if uploaded_file_1 is not None and uploaded_file_2 is not None:
+    file_bytes1 = np.asarray(bytearray(uploaded_file_1.read()), dtype=np.uint8)
+    img1 = cv2.imdecode(file_bytes1, 1)
+    file_bytes2 = np.asarray(bytearray(uploaded_file_2.read()), dtype=np.uint8)
+    img2 = cv2.imdecode(file_bytes2, 1)
+    # Display original image
+    st.image(img1, channels="BGR", use_column_width=True, caption='Original Image 1')
+    st.image(img2, channels="BGR", use_column_width=True, caption='Original Image 2')
+
+    opt = st.sidebar.selectbox("Choose processing option", ["FEATURE EXTRACTING FROM A IMAGE"])
+    if opt == "FEATURE EXTRACTING FROM A IMAGE":
+        option = st.sidebar.selectbox("Choose processing option", ["Original", "Compare Images by distance",
+                                                 "Variation of two HU moment", "SPOT DIFFERENCES"])
+
+        if option == "Compare Images by distance":
+            if st.sidebar.button("Convert"):
+                euclidean_distance1, euclidean_distance2 = compare_images(img1, img2)
+                st.write("Euclidean distance of Image 1:", euclidean_distance1)
+                st.write("Euclidean distance of Image 2:", euclidean_distance2)
+                 #Create a dataframe for the line chart
+                df = pd.DataFrame({
+                'Image': ['Image 1', 'Image 2'],
+                'Euclidean Distance': [euclidean_distance1, euclidean_distance2]
+                })
+
+                # Display the line chart
+                st.line_chart(df.set_index('Image'))
+                if euclidean_distance1 == euclidean_distance2:
+                    st.write("Images are same")
+                else:
+                    st.write("Images are different")
+                # Add a download button for the images
+                if st.button("Download Images"):
+                    st.write("Placeholder for download logic")
+
+        elif option == "Variation of two HU moment":
+            if st.sidebar.button("Convert"):
+                hu_moments1 = calculate_hu_moments_contour(img1)
+                hu_moments2 = calculate_hu_moments_contour(img2)
+                hu_moments_data = {
+                  "HU Moment": [f"HU{i+1}" for i in range(7)],
+                  "Image 1": hu_moments1.flatten(),
+                  "Image 2": hu_moments2.flatten()
+                    }
+                hu_moments_df = pd.DataFrame(hu_moments_data)
+                #hu_moments_df = hu_moments_df.transpose()
+                plt.figure(figsize=(10, 6))
+                for i in range(1, 3):
+                    plt.plot(hu_moments_df.columns[1:], hu_moments_df.loc[i, "Image 1":], label=f"Image {i}")
+
+                plt.title('Variation of Hu Moments for two images')
+                plt.xlabel('HU Moment')
+                plt.ylabel('Value')
+                plt.legend()
+                plt.grid(True)
+
+                # Display the line chart
+                st.write(hu_moments_df)
+                st.pyplot()
+
+
+
+
+
+        elif option == "SPOT DIFFERENCES":
+            if st.sidebar.button("Convert"):
+                highlighted_image = find_differences(img1, img2)
+                st.image(highlighted_image, channels="BGR", use_column_width=True,
+                         caption='Images with Differences Highlighted')
+
+else:
+    if uploaded_file_1 is not None:
+        file_bytes = np.asarray(bytearray(uploaded_file_1.read()), dtype=np.uint8)
+        img = cv2.imdecode(file_bytes, 1)
+
+        # Display original image
+        st.image(img, channels="BGR", use_column_width=True, caption='Original Image')
+
+        # Processing options
+        opt = st.sidebar.selectbox("Choose processing option",
+                                   ["DIFFERENT OPERATION ON A IMAGE", "FEATURE EXTRACTING FROM A IMAGE"])
+        if opt == "DIFFERENT OPERATION ON A IMAGE":
+            option = st.sidebar.selectbox("Choose processing option",
+                                          ["Original", "Convert to grayscale", "Detect edges", "Play with channels",
+                                           "Resize an image", "Apply blur filter", "Rotate image", "Detect faces",
+                                           "Crop image", "Draw shapes", "Create Avtar", "Add Reflection"])
+            if option != "Original":
+                st.sidebar.text("")  # Adding a blank space for better UI separation
+            if option == "Convert to grayscale":
+                if st.sidebar.button("Convert"):
+                    img_gray = convert_to_gray(img)
+                    st.image(img_gray, caption='Grayscale Image', use_column_width=True, channels='GRAY')
+                    gray_bytes = Image.fromarray(img_gray).tobytes()
+
+                    # Check if gray_bytes is not None before creating FileDownloader
+                    if gray_bytes is not None:
+                        # Add a download button for the grayscale image
+                        # Determine the file extension based on the original image format
+                        file_ext = uploaded_file_1.name.split('.')[-1]
+                        download_gray = FileDownloader(gray_bytes, filename='grayscale_image', file_ext=file_ext)
+                        download_gray.download()
+
+
+            elif option == "Detect edges":
+                if st.sidebar.button("Convert"):
+                    img_edges = detect_edges(img)
+                    st.image(img_edges, use_column_width=True, caption='Edge Detected Image')
+                    gray_bytes = Image.fromarray(img_edges).tobytes()
+
+                    # Check if gray_bytes is not None before creating FileDownloader
+                    if gray_bytes is not None:
+                        # Determine the file extension based on the original image format
+                        file_ext = uploaded_file_1.name.split('.')[-1]
+                        # Add a download button for the grayscale image
+                        download_gray = FileDownloader(gray_bytes, filename='grayscale_image', file_ext=file_ext)
+                        download_gray.download()
+            elif option == "Play with channels":
+                selected_channel = st.sidebar.radio("Select a channel to manipulate", ("Red", "Green", "Blue"))
+                if st.sidebar.button("Convert"):
+                    img_play = play_with_channels(img, selected_channel)
+                    st.image(img_play, use_column_width=True, caption=f'{selected_channel} Channel Manipulated Image')
+                    gray_bytes = Image.fromarray(img_play).tobytes()
+
+                    # Check if gray_bytes is not None before creating FileDownloader
+                    if gray_bytes is not None:
+                        # Add a download button for the grayscale image
+                        file_ext = uploaded_file_1.name.split('.')[-1]
+                        download_gray = FileDownloader(gray_bytes, filename='grayscale_image', file_ext=file_ext)
+                        download_gray.download()
+            elif option == "Resize an image":
+                width = st.sidebar.number_input("Enter width:", value=780)
+                height = st.sidebar.number_input("Enter height:", value=540)
+                if st.sidebar.button("Convert"):
+                    img_re = resize(img, width, height)
+                    st.image(img_re, use_column_width=True, caption='Resized Image')
+                    gray_bytes = Image.fromarray(img_re).tobytes()
+
+                    # Check if gray_bytes is not None before creating FileDownloader
+                    if gray_bytes is not None:
+                        # Add a download button for the grayscale image
+                        file_ext = uploaded_file_1.name.split('.')[-1]
+                        download_gray = FileDownloader(gray_bytes, filename='grayscale_image', file_ext=file_ext)
+                        download_gray.download()
+            elif option == "Apply blur filter":
+                blur_type = st.sidebar.selectbox("Select a blur filter", ["Gaussian", "Median", "Bilateral"])
+                if st.sidebar.button("Convert"):
+                    blurred_img = apply_blur(img, blur_type)
+                    st.image(blurred_img, use_column_width=True, caption=f'{blur_type} Filter Applied Image')
+                    gray_bytes = Image.fromarray(blurred_img).tobytes()
+
+                    # Check if gray_bytes is not None before creating FileDownloader
+                    if gray_bytes is not None:
+                        # Add a download button for the grayscale image
+                        file_ext = uploaded_file_1.name.split('.')[-1]
+                        download_gray = FileDownloader(gray_bytes, filename='grayscale_image', file_ext=file_ext)
+                        download_gray.download()
+            elif option == "Rotate image":
+                angle = st.sidebar.number_input("Enter angle (in degrees):", value=0)
+                if st.sidebar.button("Convert"):
+                    rotated_img = rotate_image(img, angle)
+                    st.image(rotated_img, use_column_width=True, caption=f'Rotated Image (Angle: {angle} degrees)')
+                    gray_bytes = Image.fromarray(rotated_img).tobytes()
+
+                    # Check if gray_bytes is not None before creating FileDownloader
+                    if gray_bytes is not None:
+                        # Add a download button for the grayscale image
+                        file_ext = uploaded_file_1.name.split('.')[-1]
+                        download_gray = FileDownloader(gray_bytes, filename='grayscale_image', file_ext=file_ext)
+                        download_gray.download()
+            elif option == "Detect faces":
+                if st.sidebar.button("Convert"):
+                    img_with_faces = detect_faces(img)
+                    st.image(img_with_faces, use_column_width=True, caption='Image with Detected Faces')
+                    gray_bytes = Image.fromarray(img_with_faces).tobytes()
+
+                    # Check if gray_bytes is not None before creating FileDownloader
+                    if gray_bytes is not None:
+                        # Add a download button for the grayscale image
+                        file_ext = uploaded_file_1.name.split('.')[-1]
+                        download_gray = FileDownloader(gray_bytes, filename='grayscale_image', file_ext=file_ext)
+                        download_gray.download()
+            elif option == "Crop image":
+                x1 = st.sidebar.number_input("Enter x1:", min_value=0, max_value=img.shape[1] - 1, value=0)
+                y1 = st.sidebar.number_input("Enter y1:", min_value=0, max_value=img.shape[0] - 1, value=0)
+                x2 = st.sidebar.number_input("Enter x2:", min_value=0, max_value=img.shape[1] - 1,
+                                             value=img.shape[1] - 1)
+                y2 = st.sidebar.number_input("Enter y2:", min_value=0, max_value=img.shape[0] - 1,
+                                             value=img.shape[0] - 1)
+                if st.button("Crop"):
+                    cropped_img = crop_image(img, x1, y1, x2, y2)
+                    st.image(cropped_img, channels="BGR", use_column_width=True, caption='Cropped Image')
+                    gray_bytes = Image.fromarray(cropped_img).tobytes()
+
+                    # Check if gray_bytes is not None before creating FileDownloader
+                    if gray_bytes is not None:
+                        # Add a download button for the grayscale image
+                        file_ext = uploaded_file_1.name.split('.')[-1]
+                        download_gray = FileDownloader(gray_bytes, filename='grayscale_image', file_ext=file_ext)
+                        download_gray.download()
+            elif option == "Draw shapes":
+                st.sidebar.markdown("### Draw Shapes")
+                canvas_result = st_canvas(
+                    fill_color="rgba(255, 165, 0, 0.3)",  # Default fill color with some opacity
+                    stroke_width=2,
+                    stroke_color="rgb(0, 0, 0)",  # Black stroke color
+                    background_color="#ffffff",  # White background color
+                    height=img.shape[0],
+                    width=img.shape[1],
+                    drawing_mode="freedraw",  # Allow free drawing
+                    key="canvas")
+                if canvas_result.image_data is not None:
+                    drawn_image = draw_shapes(img.copy(), "line", (0, 255, 0), 2, (0, 0),
+                                              (100, 100))  # Example: Drawing a line
+            # st.image(drawn_image, use_colmn_width=True, caption='Image with Drawn Shapes')
+            elif option == "Create Avtar":
+                if st.sidebar.button("Convert"):
+                    cartoonized_img = cartoonize_image(img)
+                    st.image(cartoonized_img, channels="RGB", use_column_width=True, caption='Cartoonized Image')
+                    gray_bytes = Image.fromarray(cartoonized_img).tobytes()
+
+                    # Check if gray_bytes is not None before creating FileDownloader
+                    if gray_bytes is not None:
+                        # Add a download button for the grayscale image
+                        file_ext = uploaded_file_1.name.split('.')[-1]
+                        download_gray = FileDownloader(gray_bytes, filename='grayscale_image', file_ext=file_ext)
+                        download_gray.download()
+            elif option == "Add Reflection":
+                reflection_intensity = st.sidebar.slider("Reflection Intensity", 0.0, 1.0, 0.5, 0.1)
+                if st.sidebar.button("convert"):
+                    reflected_img = add_reflection(img, reflection_intensity)
+                    st.image(reflected_img, channels="BGR", use_column_width=True, caption='Image with Reflection')
+                    gray_bytes = Image.fromarray(reflected_img).tobytes()
+
+                    # Check if gray_bytes is not None before creating FileDownloader
+                    if gray_bytes is not None:
+                        # Add a download button for the grayscale image
+                        file_ext = uploaded_file_1.name.split('.')[-1]
+                        download_gray = FileDownloader(gray_bytes, filename='grayscale_image', file_ext=file_ext)
+                        download_gray.download()
+
+        else:
+            option = st.sidebar.selectbox("Choose processing option",
+                                          ["Original", "Calculate Area, Perimeter, and Centroid","Invariant to scale",
+                                           "Recognize Shapes", "Calculate Hu Moments"])
+
+            if option == "Calculate Hu Moments":
+                if st.sidebar.button("Convert"):
+                    hu_moments = calculate_hu_moments(img)
+
+                    # Display the Hu Moments
+                    st.write("Hu Moments:")
+                    st.write(hu_moments)
+
+                    # Plot a bar chart for the Hu Moments
+                    labels = ['Hu1', 'Hu2', 'Hu3', 'Hu4', 'Hu5', 'Hu6', 'Hu7']
+                    plt.bar(labels, hu_moments)
+                    plt.title('Hu Moments')
+                    plt.xlabel('Moment')
+                    plt.ylabel('Value')
+                    st.pyplot()
+
+            elif option == "Recognize Shapes":
+                if st.sidebar.button("Convert"):
+                    recognized_shapes = recognize_shapes(img)
+                    if recognized_shapes:
+                        output_image = img.copy()
+                        recognized_shape_names = []  # List to store recognized shape names
+                        for shape, (x, y) in recognized_shapes:
+                              cv2.putText(output_image, shape, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                              recognized_shape_names.append(shape)  # Append recognized shape name to the list
+                        st.image(output_image, channels="BGR", use_column_width=True,
+                                 caption=f'Recognized Shapes: {", ".join(recognized_shape_names)}')
+
+
+                else:
+                    st.write("No shapes detected.")
+
+            elif option == "Invariant to scale":
+                if st.sidebar.button("Convert"):
+                    hu1_moment = calculate_hu1_moment(img)
+
+                    # Display the Hu1 Moment
+                    st.write("Hu1 Moment:", hu1_moment)
+
+                    # Plot histogram of Hu Moment 1 values across the dataset
+                    plt.figure(figsize=(8, 6))
+                    plt.hist(hu1_moment, bins=20, color='skyblue', edgecolor='black')
+                    plt.title('Distribution of Hu Moment 1 (Hu1)')
+                    plt.xlabel('Hu Moment 1 Value')
+                    plt.ylabel('Frequency')
+                    plt.grid(True)
+                    st.pyplot()
+
+            elif option == "Calculate Area, Perimeter, and Centroid":
+                if st.sidebar.button("Calculate"):
+                    # Assuming img1 is the input image
+                    area, perimeter, centroid = calculate_area_perimeter_centroid(img)
+
+                    if area is not None and perimeter is not None and centroid is not None:
+                        # Draw text on the image
+                        output_img = img.copy()
+                        st.write("Area:", area)
+                        st.write("Perimeter:", perimeter)
+                        st.write("Centroid:", centroid)
+                        data = {'Area': area, 'Perimeter': perimeter, 'Centroid': centroid}
+                        st.write("Raw data:", data)
+                        # Display the output image
+                        st.image(output_img, channels="BGR", width=800)
+                    else:
+                        st.write("Unable to calculate area, perimeter, and centroid.")
